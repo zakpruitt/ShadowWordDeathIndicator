@@ -75,7 +75,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "v${{ steps.ver.outputs.version }}" \
-            "${{ steps.pkg.outputs.zip }}" \
+            "${{ steps.pkg.outputs.zip }}" release.json \
             --title "v${{ steps.ver.outputs.version }}" \
             --notes-file notes.md \
             --target "$(git rev-parse HEAD)"
