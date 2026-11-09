@@ -1,0 +1,8 @@
+## Interface: 16001
+## Title: Shadow Word: Death Indicator
+## Notes: Glows your target's bars and turns its portrait into Shadow Word: Death when your highest rank will kill it. /swd
+## Author: Zak Pruitt
+## Version: 1.0.0
+## SavedVariables: ShadowWordDeathIndicatorDB
+
+ShadowWordDeathIndicator.lua
