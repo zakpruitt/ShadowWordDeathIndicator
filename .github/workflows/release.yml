@@ -1,0 +1,62 @@
+name: Build and release
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Version
+        id: ver
+        run: |
+          # Major.minor comes from the .toc; the patch is the run number
+          BASE=$(sed -nE 's/^## Version:[[:space:]]*([0-9]+\.[0-9]+).*/\1/p' ShadowWordDeathIndicator.toc)
+          echo "version=${BASE}.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Package
+        id: pkg
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          ZIP="ShadowWordDeathIndicator-${VERSION}.zip"
+          # Only what WoW loads; tools/ and the icon source stay out of the zip
+          rm -rf dist && mkdir -p dist/ShadowWordDeathIndicator/Textures
+          cp ShadowWordDeathIndicator.toc ShadowWordDeathIndicator.lua dist/ShadowWordDeathIndicator/
+          cp Textures/*.tga dist/ShadowWordDeathIndicator/Textures/
+          sed -i -E "s/^## Version:.*/## Version: ${VERSION}/" dist/ShadowWordDeathIndicator/ShadowWordDeathIndicator.toc
+          (cd dist && zip -qr "../${ZIP}" ShadowWordDeathIndicator)
+          echo "zip=${ZIP}" >> "$GITHUB_OUTPUT"
+
+      - name: Release notes
+        run: |
+          PREV=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          {
+            echo "Changes:"
+            echo
+            git log --no-merges --format='- %s' ${PREV:+${PREV}..}HEAD
+            echo
+            echo "Install or update with WoWUp: **Get Addons -> Install from URL** -> \`${{ github.server_url }}/${{ github.repository }}\`"
+          } > notes.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.ver.outputs.version }}" \
+            "${{ steps.pkg.outputs.zip }}" \
+            --title "v${{ steps.ver.outputs.version }}" \
+            --notes-file notes.md \
+            --target "$(git rev-parse HEAD)"
