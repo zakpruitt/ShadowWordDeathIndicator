@@ -3,6 +3,8 @@
 ## Notes: Glows your target's bars and turns its portrait into Shadow Word: Death when your highest rank will kill it. /swd
 ## Author: Zak Pruitt
 ## Version: 1.0.0
+## Category: Combat
+## IconTexture: Interface\AddOns\ShadowWordDeathIndicator\Textures\Icon
 ## SavedVariables: ShadowWordDeathIndicatorDB
 
 ShadowWordDeathIndicator.lua
