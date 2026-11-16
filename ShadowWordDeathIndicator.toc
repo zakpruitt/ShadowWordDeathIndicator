@@ -4,6 +4,7 @@
 ## Author: Zak Pruitt
 ## Version: 1.0.0
 ## Category: Combat
+## X-Curse-Project-ID: 1793663
 ## IconTexture: Interface\AddOns\ShadowWordDeathIndicator\Textures\Icon
 ## SavedVariables: ShadowWordDeathIndicatorDB
 
