@@ -2,7 +2,7 @@
 
 Know when Shadow Word: Death will finish your target.
 
-When your highest rank of Shadow Word: Death will kill your target, a soft purple glow hugs its health and power bars and its portrait turns into the Shadow Word: Death icon with a pulsing halo. It works with EllesmereUI, ElvUI, Shadowed Unit Frames and Blizzard's target frame without any setup.
+When your highest rank of Shadow Word: Death will kill your target, a soft purple glow hugs its health and power bars and its portrait turns into the Shadow Word: Death icon with a pulsing halo. If Shadow Word: Death is on cooldown, the portrait icon displays a cooldown sweeper; if your target is out of range, the icon tints reddish. It works with EllesmereUI, ElvUI, Shadowed Unit Frames and Blizzard's target frame without any setup.
 
 ## Commands
 

@@ -1,6 +1,7 @@
 -- Shadow Word: Death Indicator
 -- When your highest known rank of Shadow Word: Death will kill the target, a soft glow hugs the target's health
--- and power bars and its portrait turns into the SW:D icon.
+-- and power bars and its portrait turns into the SW:D icon (with a cooldown sweeper when on cooldown, and tinted
+-- reddish when out of range).
 --
 -- On WoW: Forever the target's health is a "secret" value in combat: Lua can't compare it with anything. A
 -- StatusBar still accepts it, so the widget does the comparison:
@@ -374,6 +375,8 @@ end
 -- Portrait: the SW:D icon over the portrait with a soft halo around it (round or square)
 ---------------------------------------------------------------------------
 
+local OUT_OF_RANGE_COLOR = { 0.85, 0.25, 0.25 }
+
 local portraitGlow = makeLethalWindow("ShadowWordDeathIndicatorPortrait", 30)
 local portraitLook = {}
 do
@@ -398,12 +401,55 @@ do
         mask:SetAllPoints(look.icon)
         look.mask = mask
     end
+
+    local okCd, cd = pcall(CreateFrame, "Cooldown", nil, c, "CooldownFrameTemplate")
+    if okCd and cd then
+        cd:SetFrameLevel(c:GetFrameLevel() + 5)
+        cd:EnableMouse(false)
+        pcall(cd.SetDrawEdge, cd, true)
+        pcall(cd.SetDrawSwipe, cd, true)
+        pcall(cd.SetSwipeColor, cd, 0, 0, 0, 0.8)
+        pcall(cd.SetHideCountdownNumbers, cd, false)
+        cd:Hide()
+        look.cooldown = cd
+    end
 end
 
 function portraitLook.setIcon(id)
     if id == portraitLook.iconFor then return end
     portraitLook.iconFor = id
     portraitLook.icon:SetTexture((id and spellIcon(id)) or FALLBACK_ICON)
+end
+
+function portraitLook.setCooldown(start, duration)
+    local look = portraitLook
+    if not look.cooldown then return end
+    if start and duration and duration > 0 then
+        if look.cdStart ~= start or look.cdDuration ~= duration then
+            look.cdStart = start
+            look.cdDuration = duration
+            look.cooldown:SetCooldown(start, duration)
+        end
+        look.cooldown:Show()
+    else
+        if look.cdStart ~= 0 then
+            look.cdStart = 0
+            look.cdDuration = 0
+            look.cooldown:Clear()
+        end
+        look.cooldown:Hide()
+    end
+end
+
+function portraitLook.setOutOfRange(out)
+    local look = portraitLook
+    if look.outOfRange == out then return end
+    look.outOfRange = out
+    if out then
+        look.icon:SetVertexColor(OUT_OF_RANGE_COLOR[1], OUT_OF_RANGE_COLOR[2], OUT_OF_RANGE_COLOR[3], 1)
+    else
+        look.icon:SetVertexColor(1, 1, 1, 1)
+    end
 end
 
 -- Lays out the icon `pad` px inside the window: round (halo, masked icon) or square (9-slice glow).
@@ -421,6 +467,20 @@ function portraitLook.layout(round, pad)
     look.halo:SetShown(round)
     look.setSquareCorner(pad * GLOW_CORNER_TEXELS / GLOW_EDGE_TEXELS)
     for _, piece in pairs(look.squareGlow) do piece:SetShown(not round) end
+
+    if look.cooldown then
+        look.cooldown:ClearAllPoints()
+        look.cooldown:SetAllPoints(look.icon)
+        pcall(look.cooldown.SetUseCircularEdge, look.cooldown, round)
+        pcall(look.cooldown.SetSwipeTexture, look.cooldown, round and ROUND_MASK or WHITE)
+        if look.mask and look.cooldown.GetRegions then
+            for _, region in ipairs({ look.cooldown:GetRegions() }) do
+                if region and region.IsObjectType and region:IsObjectType("Texture") then
+                    pcall(round and region.AddMaskTexture or region.RemoveMaskTexture, region, look.mask)
+                end
+            end
+        end
+    end
 end
 
 local function applyLook()
@@ -543,6 +603,95 @@ end
 ---------------------------------------------------------------------------
 
 local testUntil
+local swdCastStart, swdCastDuration = 0, 0
+
+local function isSwdSpell(id)
+    if type(id) ~= "number" or isSecret(id) then return false end
+    if id == spell.id then return true end
+    for _, candidate in ipairs(candidateIds()) do
+        if candidate == id then return true end
+    end
+    return false
+end
+
+local function getSwdBaseCooldown(id)
+    if GetSpellBaseCooldown then
+        local ok, ms = pcall(GetSpellBaseCooldown, id)
+        if ok and type(ms) == "number" and not isSecret(ms) and ms > 0 then
+            return ms / 1000
+        end
+    end
+    return 12
+end
+
+local function getCooldownInfo(id)
+    if not id then return nil, nil end
+    local start, duration
+    if C_Spell and C_Spell.GetSpellCooldown then
+        local ok, info = pcall(C_Spell.GetSpellCooldown, id)
+        if ok and type(info) == "table" then
+            start, duration = info.startTime, info.duration
+        end
+    end
+    if (not start or isSecret(start)) and GetSpellCooldown then
+        local ok, s, d = pcall(GetSpellCooldown, id)
+        if ok then start, duration = s, d end
+    end
+
+    -- If client returned secret values (e.g. in combat), fall back to cast timer
+    if isSecret(start) or isSecret(duration) or type(duration) ~= "number" then
+        local now = GetTime()
+        if swdCastStart > 0 and (now - swdCastStart) < swdCastDuration then
+            return swdCastStart, swdCastDuration
+        end
+        return nil, nil
+    end
+
+    -- Real spell cooldown (ignore GCD <= 1.6s)
+    if duration and duration > 1.6 then
+        return start, duration
+    end
+
+    -- Fallback to cast timer if client cooldown has not updated yet
+    local now = GetTime()
+    if swdCastStart > 0 and (now - swdCastStart) < swdCastDuration then
+        return swdCastStart, swdCastDuration
+    end
+
+    return nil, nil
+end
+
+local function checkSpellRange(id, unit)
+    if not id or not unit or not UnitExists(unit) then return nil end
+    local r
+    if C_Spell and C_Spell.IsSpellInRange then
+        local ok, val = pcall(C_Spell.IsSpellInRange, id, unit)
+        if ok and not isSecret(val) and val ~= nil then
+            r = val
+        end
+    end
+    if r == nil and IsSpellInRange then
+        local name = spellName(id)
+        if name then
+            local ok, val = pcall(IsSpellInRange, name, unit)
+            if ok and not isSecret(val) and val ~= nil then
+                r = val
+            end
+        end
+        if r == nil then
+            local ok, val = pcall(IsSpellInRange, id, unit)
+            if ok and not isSecret(val) and val ~= nil then
+                r = val
+            end
+        end
+    end
+    if r == nil then return nil end
+    return (r == true or r == 1)
+end
+
+local function isOutOfRange(id, unit)
+    return checkSpellRange(id, unit) == false
+end
 
 local function targetIsValid()
     return UnitExists("target")
@@ -561,6 +710,13 @@ local function update()
 
     barGlow.show(db.border, damage, testing)
     portraitGlow.show(db.portrait, damage, testing)
+
+    local start, duration = getCooldownInfo(spell.id)
+    portraitLook.setCooldown(start, duration)
+
+    local outOfRange = (testing and UnitExists("target") and isOutOfRange(spell.id, "target"))
+        or (not testing and targetIsValid() and isOutOfRange(spell.id, "target"))
+    portraitLook.setOutOfRange(outOfRange)
 end
 
 local function loadSettings()
@@ -588,10 +744,11 @@ driver:SetScript("OnUpdate", function(_, elapsed)
 end)
 
 for _, event in ipairs({ "ADDON_LOADED", "PLAYER_LOGIN", "SPELLS_CHANGED", "PLAYER_REGEN_ENABLED",
-    "PLAYER_EQUIPMENT_CHANGED", "PLAYER_TARGET_CHANGED" }) do
+    "PLAYER_EQUIPMENT_CHANGED", "PLAYER_TARGET_CHANGED", "SPELL_UPDATE_COOLDOWN",
+    "SPELL_UPDATE_USABLE", "UNIT_SPELLCAST_SUCCEEDED" }) do
     driver:RegisterEvent(event)
 end
-driver:SetScript("OnEvent", function(_, event, arg1)
+driver:SetScript("OnEvent", function(_, event, arg1, arg2, arg3)
     if event == "ADDON_LOADED" then
         if arg1 == ADDON_NAME then
             loadSettings()
@@ -601,6 +758,17 @@ driver:SetScript("OnEvent", function(_, event, arg1)
         return
     elseif event == "PLAYER_TARGET_CHANGED" then
         reattach() -- some unit frame addons build or swap their frames late
+        update()
+    elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
+        if arg1 == "player" then
+            local spellId = (type(arg3) == "number" and arg3) or (type(arg2) == "number" and arg2)
+            if spellId and isSwdSpell(spellId) then
+                swdCastStart = GetTime()
+                swdCastDuration = getSwdBaseCooldown(spellId)
+                update()
+            end
+        end
+    elseif event == "SPELL_UPDATE_COOLDOWN" or event == "SPELL_UPDATE_USABLE" then
         update()
     else
         refreshSpell()
@@ -668,6 +836,14 @@ local function debugInfo()
         extra and " + power bar" or "",
         findPortrait() and "found" or "none (icon beside the bars)",
         tostring(portraitLook.round), tostring(InCombatLockdown())))
+    local start, duration = getCooldownInfo(spell.id)
+    local cdRem = (start and duration and start > 0 and duration > 0) and math.max(0, start + duration - GetTime()) or 0
+    local inRange = checkSpellRange(spell.id, "target")
+    local rangeStr = inRange == true and "in range" or (inRange == false and "OUT OF RANGE" or "unknown/no target")
+    print(string.format("  cooldown: %s%s, target range: %s",
+        (start and duration and duration > 0) and "ON COOLDOWN" or "ready",
+        cdRem > 0 and string.format(" (%.1fs left)", cdRem) or "",
+        rangeStr))
 end
 
 -- /swd frame and /swd portraitframe: `value` is a frame path (case-sensitive), "mouse" or "auto".
